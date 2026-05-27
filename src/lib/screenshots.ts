@@ -1,13 +1,19 @@
-// Screenshot generation pipeline with two strategies:
-//   1. "emulator" — boot the APK in Appetize.io and capture frames (if token set)
-//   2. "template" — composite the app icon + label onto pre-rendered device frames
+// Screenshot generation pipeline with multiple strategies:
+//   1. "emulator" — install the APK on the user's VMOS Cloud pad and capture
+//                    preview frames (if VMOSCLOUD_* + VMOSCLOUD_PAD_CODE are set)
+//   2. "emulator" — fall back to Appetize.io if VMOS is unavailable but
+//                    APPETIZE_API_TOKEN is set
+//   3. "template" — composite the app icon + label onto pre-rendered device
+//                    frames (always-available fallback)
 //
-// Both produce PNGs sized for Huawei AppGallery phone screenshots (1080x1920).
+// All strategies produce PNGs sized for Huawei AppGallery phone screenshots
+// (1080x1920).
 import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
 import type { ParsedApk } from "./apk-parser";
 import { runAppetizeScreenshots } from "./appetize";
+import { runVmosCloudScreenshots } from "./vmoscloud-screenshots";
 
 export type ScreenshotSource = "emulator" | "template" | "ai";
 
@@ -91,12 +97,35 @@ async function generateTemplateScreenshots(
   return results;
 }
 
+export interface GenerateScreenshotsOpts {
+  uploadId: string;
+  packageName?: string;
+}
+
 export async function generateScreenshots(
   apk: ParsedApk,
   apkLocalPath: string,
   outDir: string,
   taglines: string[],
+  opts?: GenerateScreenshotsOpts,
 ): Promise<GeneratedScreenshot[]> {
+  const hasVmos =
+    !!process.env.VMOSCLOUD_ACCESS_KEY_ID &&
+    !!process.env.VMOSCLOUD_SECRET_ACCESS_KEY &&
+    !!process.env.VMOSCLOUD_PAD_CODE;
+  const pkg = opts?.packageName ?? apk.packageName;
+  if (hasVmos && opts?.uploadId && pkg) {
+    try {
+      const shots = await runVmosCloudScreenshots({
+        uploadId: opts.uploadId,
+        packageName: pkg,
+        outDir,
+      });
+      if (shots.length > 0) return shots;
+    } catch (err) {
+      console.warn("VMOS Cloud screenshot capture failed, trying next strategy:", err);
+    }
+  }
   const hasAppetize = !!process.env.APPETIZE_API_TOKEN;
   if (hasAppetize) {
     try {

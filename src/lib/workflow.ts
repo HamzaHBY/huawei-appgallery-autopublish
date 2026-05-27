@@ -149,7 +149,10 @@ export async function stepGenerateScreenshots(uploadId: string) {
     sha256: upload.apkSha256 ?? "",
   };
 
-  const shots = await generateScreenshots(apk, upload.apkPath, assetDir, taglines);
+  const shots = await generateScreenshots(apk, upload.apkPath, assetDir, taglines, {
+    uploadId,
+    packageName: upload.packageName ?? undefined,
+  });
 
   await prisma.screenshot.deleteMany({ where: { uploadId } });
   for (let i = 0; i < shots.length; i++) {
