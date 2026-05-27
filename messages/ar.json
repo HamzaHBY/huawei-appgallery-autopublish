@@ -1,0 +1,62 @@
+{
+  "app": {
+    "title": "النشر التلقائي على متجر هواوي",
+    "tagline": "حمّل ملف APK وسنتولى الباقي.",
+    "nav": {
+      "dashboard": "لوحة التحكم",
+      "apps": "تطبيقاتي",
+      "uploads": "التحميلات",
+      "settings": "الإعدادات"
+    }
+  },
+  "dashboard": {
+    "uploadApkCta": "تحميل ملف APK",
+    "selectAppLabel": "تطبيق هواوي المستهدف",
+    "newAppButton": "إضافة تطبيق هواوي جديد",
+    "emptyState": "لا توجد تحميلات بعد — قم برفع ملف APK للبدء.",
+    "stepLabels": {
+      "QUEUED": "في الانتظار",
+      "PARSING_APK": "جاري تحليل APK",
+      "GENERATING_METADATA": "صياغة المحتوى",
+      "GENERATING_SCREENSHOTS": "إنشاء لقطات الشاشة",
+      "TRANSLATING": "ترجمة",
+      "PENDING_REVIEW": "بانتظار المراجعة",
+      "REJECTED_BY_USER": "مرفوض",
+      "UPLOADING_TO_HUAWEI": "جاري الرفع إلى هواوي",
+      "SUBMITTED": "تم الإرسال",
+      "PUBLISHED": "تم النشر",
+      "FAILED": "فشل"
+    }
+  },
+  "review": {
+    "heading": "مراجعة الإدراج قبل الإرسال",
+    "approveButton": "موافقة ونشر إلى هواوي",
+    "rejectButton": "رفض",
+    "editLocaleLabel": "تعديل الترجمة",
+    "fields": {
+      "title": "العنوان",
+      "shortDescription": "وصف قصير",
+      "description": "الوصف",
+      "keywords": "الكلمات المفتاحية",
+      "whatsNew": "ما الجديد"
+    }
+  },
+  "settings": {
+    "huaweiAppsHeading": "تطبيقات هواوي",
+    "newApp": {
+      "agcAppId": "معرّف التطبيق في AGC",
+      "packageName": "اسم الحزمة",
+      "displayName": "اسم العرض",
+      "category": "الفئة الافتراضية",
+      "save": "حفظ التطبيق"
+    },
+    "credentialsHeading": "بيانات اعتماد API",
+    "credentialsHint": "يتم تحميل بيانات الاعتماد من متغيرات البيئة عند التشغيل."
+  },
+  "common": {
+    "save": "حفظ",
+    "cancel": "إلغاء",
+    "back": "رجوع",
+    "loading": "جارٍ التحميل…"
+  }
+}

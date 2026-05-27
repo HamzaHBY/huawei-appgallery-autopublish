@@ -1,0 +1,183 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// A Huawei AppGallery app that the user wants to manage.
+// Multiple Apps allow managing several products from one dashboard.
+model HuaweiApp {
+  id            String   @id @default(cuid())
+  agcAppId      String   @unique // Huawei AGC App ID (numeric, from console)
+  packageName   String
+  displayName   String
+  defaultLocale String   @default("en-US")
+  category      Int      @default(2) // 2 = "Tools" by default; user can edit
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  uploads Upload[]
+}
+
+// One APK upload + its end-to-end publishing pipeline.
+model Upload {
+  id          String   @id @default(cuid())
+  huaweiAppId String?
+  huaweiApp   HuaweiApp? @relation(fields: [huaweiAppId], references: [id], onDelete: SetNull)
+
+  // Original APK file
+  filename    String
+  apkPath     String
+  apkSize     BigInt
+  apkSha256   String?
+
+  // Parsed APK metadata
+  packageName    String?
+  versionName    String?
+  versionCode    Int?
+  minSdkVersion  Int?
+  targetSdkVersion Int?
+  permissions    String[] @default([])
+  iconPath       String?
+  apkLabel       String?
+
+  // Pipeline state
+  status      UploadStatus @default(QUEUED)
+  currentStep String?
+  errorMessage String?
+  progress    Int @default(0) // 0-100
+
+  // Approval gating
+  approvalRequired Boolean @default(true)
+  approvedAt       DateTime?
+  approvedBy       String?
+
+  // Huawei review
+  huaweiReleaseId   String?
+  huaweiReleaseType Int @default(1) // 1 = release on approval
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobs          Job[]
+  localizations Localization[]
+  screenshots   Screenshot[]
+  events        UploadEvent[]
+}
+
+enum UploadStatus {
+  QUEUED
+  PARSING_APK
+  GENERATING_METADATA
+  GENERATING_SCREENSHOTS
+  TRANSLATING
+  PENDING_REVIEW
+  REJECTED_BY_USER
+  UPLOADING_TO_HUAWEI
+  SUBMITTED
+  PUBLISHED
+  FAILED
+}
+
+// Per-language metadata (title, description, etc.)
+model Localization {
+  id        String  @id @default(cuid())
+  uploadId  String
+  upload    Upload  @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  locale       String // BCP-47 e.g. "en-US", "zh-CN", "ar-EG"
+  title        String
+  shortDescription String
+  description  String
+  keywords     String?
+  whatsNew     String?
+
+  // Huawei status flags
+  uploadedToHuaweiAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([uploadId, locale])
+}
+
+model Screenshot {
+  id        String @id @default(cuid())
+  uploadId  String
+  upload    Upload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  locale    String  @default("en-US")
+  path      String
+  width     Int
+  height    Int
+  ordering  Int     @default(0)
+  source    String  @default("template") // "emulator" | "template" | "ai"
+
+  uploadedToHuaweiAt DateTime?
+
+  createdAt DateTime @default(now())
+}
+
+// Background processing job (one row per workflow step)
+model Job {
+  id        String   @id @default(cuid())
+  uploadId  String
+  upload    Upload   @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  kind      JobKind
+  status    JobStatus @default(QUEUED)
+  attempts  Int      @default(0)
+  maxAttempts Int    @default(3)
+  payload   Json?
+  result    Json?
+  errorMessage String?
+
+  scheduledAt DateTime @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, scheduledAt])
+}
+
+enum JobKind {
+  PARSE_APK
+  GENERATE_METADATA
+  TRANSLATE_METADATA
+  GENERATE_SCREENSHOTS
+  PUBLISH_TO_HUAWEI
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+// Audit log for an upload's lifecycle (visible in UI)
+model UploadEvent {
+  id        String   @id @default(cuid())
+  uploadId  String
+  upload    Upload   @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  level     String   @default("info") // info | warn | error
+  message   String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([uploadId, createdAt])
+}
+
+// Key-value settings (HUAWEI creds masked in UI; secrets sourced from env in prod)
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

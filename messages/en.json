@@ -1,0 +1,62 @@
+{
+  "app": {
+    "title": "Huawei AppGallery Auto-Publish",
+    "tagline": "Upload an APK. We handle everything else.",
+    "nav": {
+      "dashboard": "Dashboard",
+      "apps": "My apps",
+      "uploads": "Uploads",
+      "settings": "Settings"
+    }
+  },
+  "dashboard": {
+    "uploadApkCta": "Upload APK",
+    "selectAppLabel": "Target Huawei app",
+    "newAppButton": "Add new Huawei app",
+    "emptyState": "No uploads yet — drop an APK to get started.",
+    "stepLabels": {
+      "QUEUED": "Queued",
+      "PARSING_APK": "Parsing APK",
+      "GENERATING_METADATA": "Writing copy",
+      "GENERATING_SCREENSHOTS": "Generating screenshots",
+      "TRANSLATING": "Translating",
+      "PENDING_REVIEW": "Ready for review",
+      "REJECTED_BY_USER": "Rejected",
+      "UPLOADING_TO_HUAWEI": "Uploading to Huawei",
+      "SUBMITTED": "Submitted",
+      "PUBLISHED": "Published",
+      "FAILED": "Failed"
+    }
+  },
+  "review": {
+    "heading": "Review listing before submitting",
+    "approveButton": "Approve & publish to Huawei",
+    "rejectButton": "Reject",
+    "editLocaleLabel": "Edit localization",
+    "fields": {
+      "title": "Title",
+      "shortDescription": "Short description",
+      "description": "Description",
+      "keywords": "Keywords",
+      "whatsNew": "What's new"
+    }
+  },
+  "settings": {
+    "huaweiAppsHeading": "Huawei apps",
+    "newApp": {
+      "agcAppId": "AGC App ID",
+      "packageName": "Package name",
+      "displayName": "Display name",
+      "category": "Default category",
+      "save": "Save app"
+    },
+    "credentialsHeading": "API credentials",
+    "credentialsHint": "Credentials are loaded from environment variables at runtime."
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "back": "Back",
+    "loading": "Loading…"
+  }
+}
