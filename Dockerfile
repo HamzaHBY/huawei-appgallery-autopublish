@@ -33,15 +33,16 @@ COPY --from=build /app/public ./public
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 
-# Prisma client + schema for migrations at runtime
-COPY --from=build /app/prisma ./prisma
-COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=build /app/node_modules/@prisma ./node_modules/@prisma
+# Full node_modules for the worker and prisma CLI (web uses the trace from
+# standalone, but the worker needs the full dep tree and `prisma migrate`
+# at runtime needs the prisma CLI binary).
+COPY --from=build /app/node_modules ./node_modules
 
-# Worker (run via tsx in dev; in prod we compile-on-start via tsx for simplicity)
-COPY --from=build /app/node_modules/tsx ./node_modules/tsx
+# Source for the tsx worker + schema for runtime migrations
+COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/src ./src
 COPY --from=build /app/tsconfig.json ./tsconfig.json
+COPY --from=build /app/package.json ./package.json
 
 # supervisord config to run web + worker together
 COPY deploy/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
