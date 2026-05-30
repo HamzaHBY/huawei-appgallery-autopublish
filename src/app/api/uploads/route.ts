@@ -15,7 +15,12 @@ export async function GET() {
     take: 100,
     include: { huaweiApp: true },
   });
-  return NextResponse.json({ uploads });
+  // apkSize is a BigInt column — NextResponse.json can't serialize BigInt.
+  const serialized = uploads.map((u) => ({
+    ...u,
+    apkSize: u.apkSize != null ? u.apkSize.toString() : null,
+  }));
+  return NextResponse.json({ uploads: serialized });
 }
 
 export async function POST(req: Request) {
