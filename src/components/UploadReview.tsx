@@ -73,6 +73,25 @@ export function UploadReview({ upload: initial }: { upload: UploadData }) {
 
   const active = upload.localizations.find((l) => l.locale === activeLocale);
 
+  type Check = { name: string; status: "pass" | "fail" | "warn"; detail: string };
+  const [testResult, setTestResult] = useState<{ ready: boolean; summary: string; checks: Check[] } | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  async function runPublishTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch(`/api/uploads/${upload.id}/publish-test`, { method: "POST" });
+      const json = await res.json();
+      if (res.ok) setTestResult(json);
+      else setTestResult({ ready: false, summary: json.error ?? "Test failed", checks: [] });
+    } catch (e) {
+      setTestResult({ ready: false, summary: (e as Error).message, checks: [] });
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function saveLocalization(patch: Partial<Localization>) {
     if (!active) return;
     setBusy(true);
@@ -221,7 +240,46 @@ export function UploadReview({ upload: initial }: { upload: UploadData }) {
               >
                 {t("review.rejectButton")}
               </button>
+              <button
+                disabled={testing}
+                onClick={runPublishTest}
+                className="btn btn-secondary disabled:opacity-50"
+              >
+                {testing ? "Testing…" : "Run publish test"}
+              </button>
             </div>
+
+            {testResult && (
+              <div className="mt-3 space-y-2">
+                <div
+                  className={`rounded px-2 py-1 text-sm font-medium ${
+                    testResult.ready ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                  }`}
+                >
+                  {testResult.summary}
+                </div>
+                <ul className="space-y-1 text-xs">
+                  {testResult.checks.map((c) => (
+                    <li key={c.name} className="flex gap-2">
+                      <span
+                        className={
+                          c.status === "pass"
+                            ? "text-green-600"
+                            : c.status === "warn"
+                              ? "text-amber-600"
+                              : "text-red-600"
+                        }
+                      >
+                        {c.status === "pass" ? "✓" : c.status === "warn" ? "!" : "✗"}
+                      </span>
+                      <span>
+                        <span className="font-medium">{c.name}:</span> {c.detail}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div className="card">

@@ -24,18 +24,24 @@ export default async function DashboardPage() {
         <p className="mt-2 max-w-2xl text-white/90">{t("app.tagline")}</p>
       </section>
 
+      <section className="grid gap-4 sm:grid-cols-3">
+        <Link href="/analyze" className="card transition-colors hover:border-brand">
+          <h3 className="font-semibold">APK SDK Analyzer →</h3>
+          <p className="mt-1 text-sm text-neutral-500">Upload any APK to list embedded SDKs and full app info.</p>
+        </Link>
+        <Link href="/appgallery" className="card transition-colors hover:border-brand">
+          <h3 className="font-semibold">Fetch from AppGallery →</h3>
+          <p className="mt-1 text-sm text-neutral-500">Paste an AppGallery link to fetch app info + download the APK.</p>
+        </Link>
+        <Link href="/settings" className="card transition-colors hover:border-brand">
+          <h3 className="font-semibold">Settings →</h3>
+          <p className="mt-1 text-sm text-neutral-500">Manage registered apps and credentials.</p>
+        </Link>
+      </section>
+
       <section className="card">
         <h2 className="mb-4 text-lg font-semibold">{t("dashboard.uploadApkCta")}</h2>
-        {apps.length === 0 ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            You need to register at least one Huawei app first.{" "}
-            <Link href="/settings" className="font-medium underline">
-              Add one in Settings →
-            </Link>
-          </div>
-        ) : (
-          <UploadDropzone apps={apps.map((a) => ({ id: a.id, displayName: a.displayName, packageName: a.packageName }))} />
-        )}
+        <UploadDropzone apps={apps.map((a) => ({ id: a.id, displayName: a.displayName, packageName: a.packageName }))} />
       </section>
 
       <section>

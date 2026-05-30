@@ -16,6 +16,7 @@ model HuaweiApp {
   displayName   String
   defaultLocale String   @default("en-US")
   category      Int      @default(2) // 2 = "Tools" by default; user can edit
+  autoLinked    Boolean  @default(false) // true if auto-resolved from APK package name
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -43,6 +44,11 @@ model Upload {
   permissions    String[] @default([])
   iconPath       String?
   apkLabel       String?
+
+  // Generation options (chosen at upload time)
+  screenshotSource String  @default("vmos") // vmos | ai_openai | ai_gemini | template
+  metadataPrompt   String?                   // optional custom prompt to steer metadata
+  autoCreateApp    Boolean @default(false)   // APK-only flow: auto-resolve/create AGC app
 
   // Pipeline state
   status      UploadStatus @default(QUEUED)
@@ -173,6 +179,45 @@ model UploadEvent {
   createdAt DateTime @default(now())
 
   @@index([uploadId, createdAt])
+}
+
+// Standalone APK analysis (SDK detection + full info) — independent of publishing.
+model ApkAnalysis {
+  id          String   @id @default(cuid())
+  source      String   @default("upload") // upload | appgallery
+  filename    String
+  apkPath     String?
+  apkSize     BigInt?
+  packageName String?
+  versionName String?
+  versionCode Int?
+  minSdkVersion    Int?
+  targetSdkVersion Int?
+  label       String?
+  iconPath    String?
+  permissions String[] @default([])
+  sdks        Json? // detected third-party SDKs [{ name, category, evidence }]
+  details     Json? // full parsed info dump
+  createdAt   DateTime @default(now())
+}
+
+// A request to fetch/download an app's APK + info from a public AppGallery link.
+model AppGalleryFetch {
+  id           String   @id @default(cuid())
+  sourceUrl    String
+  appStoreId   String? // C-id e.g. C115313535
+  packageName  String?
+  appName      String?
+  versionName  String?
+  developer    String?
+  iconUrl      String?
+  description  String?
+  apkPath      String? // local path if the binary was downloaded
+  apkSize      BigInt?
+  status       String   @default("PENDING") // PENDING | INFO_ONLY | DOWNLOADED | FAILED
+  errorMessage String?
+  rawDetail    Json?
+  createdAt    DateTime @default(now())
 }
 
 // Key-value settings (HUAWEI creds masked in UI; secrets sourced from env in prod)

@@ -54,6 +54,56 @@ export async function stepParseApk(uploadId: string) {
   return parsed;
 }
 
+// ---------------------- Step 1b: Auto-link AGC app ----------------------
+
+// APK-only flow: if the upload isn't linked to a HuaweiApp yet, resolve the
+// AGC appId from the parsed package name via Huawei's appid-list API and
+// link/reuse a HuaweiApp record. If the package isn't registered in the
+// account yet, we log actionable guidance and leave it unlinked (publish will
+// then fail with a clear message rather than silently).
+export async function stepAutoLinkApp(uploadId: string) {
+  const upload = await prisma.upload.findUniqueOrThrow({ where: { id: uploadId } });
+  if (upload.huaweiAppId) return; // already linked
+  const pkg = upload.packageName;
+  if (!pkg) {
+    await logEvent(uploadId, "warn", "No package name parsed; cannot auto-link AGC app");
+    return;
+  }
+
+  await logEvent(uploadId, "info", `Resolving AGC appId for package ${pkg}`);
+  let agcAppId: string | undefined;
+  try {
+    const client = huaweiClientFromEnv();
+    const map = await client.queryAppIdByPackage([pkg]);
+    agcAppId = map.get(pkg);
+  } catch (err) {
+    await logEvent(uploadId, "warn", `appid-list lookup failed: ${(err as Error).message}`);
+  }
+
+  if (!agcAppId) {
+    await logEvent(
+      uploadId,
+      "warn",
+      `No AGC app found for ${pkg}. Create the app once in AppGallery Connect (or link it in Settings); ` +
+        `re-running will auto-link it. Huawei has no public API to create a new app.`,
+    );
+    return;
+  }
+
+  const app = await prisma.huaweiApp.upsert({
+    where: { agcAppId },
+    update: { packageName: pkg, displayName: upload.apkLabel ?? pkg },
+    create: {
+      agcAppId,
+      packageName: pkg,
+      displayName: upload.apkLabel ?? pkg,
+      autoLinked: true,
+    },
+  });
+  await prisma.upload.update({ where: { id: uploadId }, data: { huaweiAppId: app.id } });
+  await logEvent(uploadId, "info", `Auto-linked to AGC app ${agcAppId}`);
+}
+
 // ---------------------- Step 2: Generate metadata ----------------------
 
 export async function stepGenerateMetadata(uploadId: string) {
@@ -73,7 +123,7 @@ export async function stepGenerateMetadata(uploadId: string) {
     sha256: upload.apkSha256 ?? "",
   };
 
-  const en = await generateMetadata(apk, DEFAULT_LOCALE);
+  const en = await generateMetadata(apk, DEFAULT_LOCALE, upload.metadataPrompt);
   await prisma.localization.upsert({
     where: { uploadId_locale: { uploadId, locale: DEFAULT_LOCALE } },
     update: en,
@@ -149,9 +199,17 @@ export async function stepGenerateScreenshots(uploadId: string) {
     sha256: upload.apkSha256 ?? "",
   };
 
+  const source = (upload.screenshotSource ?? "vmos") as
+    | "vmos"
+    | "ai_openai"
+    | "ai_gemini"
+    | "template";
+  await logEvent(uploadId, "info", `Screenshot source: ${source}`);
   const shots = await generateScreenshots(apk, upload.apkPath, assetDir, taglines, {
     uploadId,
     packageName: upload.packageName ?? undefined,
+    source,
+    onProgress: (msg) => logEvent(uploadId, "info", msg),
   });
 
   await prisma.screenshot.deleteMany({ where: { uploadId } });
@@ -251,6 +309,7 @@ export async function stepPublishToHuawei(uploadId: string) {
 export async function runPreparationPipeline(uploadId: string) {
   try {
     await stepParseApk(uploadId);
+    await stepAutoLinkApp(uploadId);
     await stepGenerateMetadata(uploadId);
     await stepTranslate(uploadId);
     await stepGenerateScreenshots(uploadId);

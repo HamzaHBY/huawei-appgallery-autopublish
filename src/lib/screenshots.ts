@@ -97,9 +97,18 @@ async function generateTemplateScreenshots(
   return results;
 }
 
+// What the user chose at upload time.
+//   "vmos"      → real emulator capture (VMOS) with template fallback
+//   "ai_openai" → OpenAI gpt-image-1
+//   "ai_gemini" → Google nano banana (gemini-2.5-flash-image)
+//   "template"  → deterministic icon/label composite
+export type ScreenshotSourceChoice = "vmos" | "ai_openai" | "ai_gemini" | "template";
+
 export interface GenerateScreenshotsOpts {
   uploadId: string;
   packageName?: string;
+  source?: ScreenshotSourceChoice;
+  onProgress?: (msg: string) => Promise<void> | void;
 }
 
 export async function generateScreenshots(
@@ -109,6 +118,30 @@ export async function generateScreenshots(
   taglines: string[],
   opts?: GenerateScreenshotsOpts,
 ): Promise<GeneratedScreenshot[]> {
+  const source = opts?.source ?? "vmos";
+
+  // ---- AI providers ----
+  if (source === "ai_openai" || source === "ai_gemini") {
+    const { generateAiScreenshots } = await import("./ai-screenshots");
+    try {
+      const shots = await generateAiScreenshots(apk, outDir, taglines, {
+        provider: source,
+        onProgress: opts?.onProgress,
+      });
+      if (shots.length > 0) return shots;
+      if (opts?.onProgress) await opts.onProgress("AI generation produced no images; using templates");
+    } catch (err) {
+      console.warn("AI screenshot generation failed, falling back to templates:", err);
+    }
+    return generateTemplateScreenshots(apk, outDir, taglines);
+  }
+
+  // ---- Explicit template choice ----
+  if (source === "template") {
+    return generateTemplateScreenshots(apk, outDir, taglines);
+  }
+
+  // ---- VMOS emulator (default) with Appetize → template fallback ----
   const hasVmos =
     !!process.env.VMOSCLOUD_ACCESS_KEY_ID &&
     !!process.env.VMOSCLOUD_SECRET_ACCESS_KEY &&

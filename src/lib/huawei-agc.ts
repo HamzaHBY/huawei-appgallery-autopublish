@@ -172,7 +172,14 @@ export class HuaweiAgcClient {
       result?: {
         UploadFileRsp?: {
           ifSuccess?: number;
-          fileInfoList?: Array<{ fileDestUrl: string; size: string }>;
+          // NOTE: Huawei's upload response misspells the URL field as
+          // `fileDestUlr` (not `fileDestUrl`). Accept both so a future API
+          // fix doesn't silently break us.
+          fileInfoList?: Array<{
+            fileDestUrl?: string;
+            fileDestUlr?: string;
+            size: string;
+          }>;
         };
       };
     };
@@ -180,10 +187,14 @@ export class HuaweiAgcClient {
     if (!ok) {
       throw new HuaweiAgcError(`File upload rejected: ${JSON.stringify(json)}`);
     }
-    const fileInfo = json.result?.UploadFileRsp?.fileInfoList?.[0];
-    if (!fileInfo) throw new HuaweiAgcError(`File upload returned no fileInfo`);
+    const raw = json.result?.UploadFileRsp?.fileInfoList?.[0];
+    if (!raw) throw new HuaweiAgcError(`File upload returned no fileInfo`);
+    const fileDestUrl = raw.fileDestUrl ?? raw.fileDestUlr;
+    if (!fileDestUrl) {
+      throw new HuaweiAgcError(`File upload returned no fileDestUrl: ${JSON.stringify(raw)}`);
+    }
     void stat;
-    return fileInfo;
+    return { fileDestUrl, size: raw.size };
   }
 
   // ---------------------- App metadata ----------------------
@@ -279,6 +290,29 @@ export class HuaweiAgcClient {
       method: "GET",
       query: { appId, releaseType: 1 },
     });
+  }
+
+  // Resolve the AGC appId(s) for one or more package names.
+  // GET /publish/v2/appid-list?packageName=a,b  → { appids: [{ key: name, value: appId }] }
+  // Returns a map of packageName -> appId (only for packages that resolved).
+  async queryAppIdByPackage(packageNames: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (packageNames.length === 0) return result;
+    const json = await this.authedFetch<unknown>(`/publish/v2/appid-list`, {
+      method: "GET",
+      query: { packageName: packageNames.join(",") },
+    });
+    // Response shape: { ret, appids: [{ key: <appName>, value: <appId> }] }
+    // Huawei keys the pair by app *name*, not package — so when querying a single
+    // package the single returned value is the appId for that package.
+    const appids = (json as Record<string, unknown>).appids as
+      | Array<{ key?: string; value?: string }>
+      | undefined;
+    if (appids && appids.length > 0 && packageNames.length === 1) {
+      const v = appids[0]?.value;
+      if (v) result.set(packageNames[0], v);
+    }
+    return result;
   }
 }
 

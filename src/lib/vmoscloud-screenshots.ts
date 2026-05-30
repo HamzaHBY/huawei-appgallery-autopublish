@@ -110,47 +110,56 @@ export async function runVmosCloudScreenshots(
     }
     await new Promise((r) => setTimeout(r, opts.startupDelayMs ?? 8000));
 
-    // 3. Capture frames using the persistent preview URL
+    // 3. Capture frames. CRITICAL: take a FRESH /screenshot each frame so every
+    //    capture reflects the *current* on-screen state. (The long-preview URL is
+    //    a live stream endpoint that returns the same opening frame when fetched
+    //    repeatedly — that was the "all screenshots look the same" bug.)
+    //    Between captures we navigate the UI with varied gestures + dwell time so
+    //    successive frames show different stages of the app.
     const count = opts.count ?? 5;
     const results: GeneratedScreenshot[] = [];
+    const dwell = opts.betweenFramesMs ?? 3000;
 
-    let previewUrl: string | null = null;
-    try {
-      const urls = await client.getLongGenerateUrl([padCode]);
-      previewUrl = urls[0]?.url ?? urls[0]?.accessUrl ?? null;
-    } catch (err) {
-      console.warn("getLongGenerateUrl failed, will fall back to /screenshot per-frame:", err);
-    }
+    // A rotation of navigation gestures to surface different screens.
+    const navigations: Array<() => Promise<unknown>> = [
+      // swipe up (scroll / advance)
+      () => client.simulateSwipe(padCode, W / 2, 1500, W / 2, 500),
+      // tap center (start / interact)
+      () => client.simulateTap(padCode, W / 2, H / 2),
+      // swipe left (next page / carousel)
+      () => client.simulateSwipe(padCode, W - 120, H / 2, 120, H / 2),
+      // tap lower-center (primary button area)
+      () => client.simulateTap(padCode, W / 2, H - 320),
+      // swipe up again (deeper content)
+      () => client.simulateSwipe(padCode, W / 2, 1500, W / 2, 500),
+    ];
 
     for (let i = 0; i < count; i++) {
-      let frameUrl = previewUrl;
-      // If long preview is unavailable, trigger a fresh screenshot for each frame
-      if (!frameUrl) {
-        try {
-          const shots = await client.screenshot([padCode], {
-            rotation: 0,
-            resolutionWidth: W,
-            resolutionHeight: H,
-            definition: 90,
-          });
-          frameUrl = shots[0]?.accessUrl ?? shots[0]?.url ?? null;
-        } catch (err) {
-          console.warn(`VMOS screenshot ${i + 1} failed:`, err);
-        }
+      let frameUrl: string | null = null;
+      try {
+        const shots = await client.screenshot([padCode], {
+          rotation: 0,
+          resolutionWidth: W,
+          resolutionHeight: H,
+          definition: 90,
+        });
+        frameUrl = shots[0]?.accessUrl ?? shots[0]?.url ?? null;
+      } catch (err) {
+        console.warn(`VMOS screenshot ${i + 1} failed:`, err);
       }
       if (frameUrl) {
         const outPath = path.join(opts.outDir, `vmos-${i + 1}.png`);
         const shot = await fetchAndNormalize(frameUrl, outPath);
         if (shot) results.push(shot);
       }
-      // Nudge UI between captures
+      // Navigate to a different stage before the next capture.
       if (i < count - 1) {
         try {
-          await client.simulateSwipe(padCode, W / 2, 1400, W / 2, 600);
+          await navigations[i % navigations.length]();
         } catch {
-          /* non-fatal */
+          /* non-fatal — best-effort navigation */
         }
-        await new Promise((r) => setTimeout(r, opts.betweenFramesMs ?? 2500));
+        await new Promise((r) => setTimeout(r, dwell));
       }
     }
     return results;
