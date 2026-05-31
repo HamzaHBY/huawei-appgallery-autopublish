@@ -251,12 +251,19 @@ export async function stepPublishToHuawei(uploadId: string) {
   const client = huaweiClientFromEnv();
   const appId = upload.huaweiApp.agcAppId;
 
-  // Upload APK
+  // Ensure the app has distribution countries — the OBS upload endpoint resolves
+  // the storage site from them, and APK uploads fail without any set.
+  await logEvent(uploadId, "info", "Ensuring distribution countries are set");
+  await client.ensureDistributionCountries(appId);
+
+  // Upload APK (OBS presigned PUT, bound by objectId)
   await logEvent(uploadId, "info", "Requesting upload URL for APK");
-  const apkSlot = await client.getUploadUrl(appId, "apk");
-  await logEvent(uploadId, "info", "Uploading APK to Huawei CDN");
-  const apkFile = await client.uploadFile(upload.apkPath, apkSlot.uploadUrl, apkSlot.authCode);
-  await client.updateAppFile(appId, apkFile.fileDestUrl, apkFile.size, path.basename(upload.apkPath));
+  const apkBytes = (await fs.stat(upload.apkPath)).size;
+  const apkSlot = await client.getUploadUrl(appId, "release.apk", apkBytes, "apk");
+  await logEvent(uploadId, "info", "Uploading APK to Huawei OBS");
+  const apkFile = await client.uploadFile(upload.apkPath, apkSlot);
+  await logEvent(uploadId, "info", `Binding APK objectId ${apkFile.objectId}`);
+  await client.updateAppFile(appId, apkFile.objectId, "release.apk");
 
   // App-level info
   await client.updateAppInfo(appId, {
@@ -283,11 +290,13 @@ export async function stepPublishToHuawei(uploadId: string) {
   // Screenshots (English first; Huawei will inherit if other langs missing imgs)
   const englishShots = upload.screenshots.filter((s) => s.locale === DEFAULT_LOCALE);
   if (englishShots.length > 0) {
-    const uploaded: Array<{ fileDestUrl: string; fileName: string; size: string }> = [];
+    const uploaded: Array<{ objectId: string; fileName: string }> = [];
     for (const shot of englishShots) {
-      const slot = await client.getUploadUrl(appId, "png");
-      const file = await client.uploadFile(shot.path, slot.uploadUrl, slot.authCode);
-      uploaded.push({ fileDestUrl: file.fileDestUrl, fileName: path.basename(shot.path), size: file.size });
+      const fileName = path.basename(shot.path);
+      const shotBytes = (await fs.stat(shot.path)).size;
+      const slot = await client.getUploadUrl(appId, fileName, shotBytes, "png");
+      const file = await client.uploadFile(shot.path, slot);
+      uploaded.push({ objectId: file.objectId, fileName });
       await prisma.screenshot.update({
         where: { id: shot.id },
         data: { uploadedToHuaweiAt: new Date() },
@@ -295,6 +304,10 @@ export async function stepPublishToHuawei(uploadId: string) {
     }
     await client.updateAppImage(appId, toHuaweiLocale(DEFAULT_LOCALE), "screenshot", uploaded);
   }
+
+  // Give Huawei a moment to process the freshly-bound package before submit
+  // (submitting immediately can fail with "Incomplete application version information").
+  await new Promise((r) => setTimeout(r, 8000));
 
   // Submit
   await logEvent(uploadId, "info", "Submitting for review");
