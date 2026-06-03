@@ -15,13 +15,24 @@ export async function GET() {
     take: 100,
     include: { huaweiApp: true },
   });
-  return NextResponse.json({ uploads });
+  // apkSize is a BigInt column — NextResponse.json can't serialize BigInt.
+  const serialized = uploads.map((u) => ({
+    ...u,
+    apkSize: u.apkSize != null ? u.apkSize.toString() : null,
+  }));
+  return NextResponse.json({ uploads: serialized });
 }
 
 export async function POST(req: Request) {
   const form = await req.formData();
   const file = form.get("file");
   const huaweiAppId = (form.get("huaweiAppId") ?? null) as string | null;
+  const metadataPrompt = ((form.get("metadataPrompt") as string | null) ?? "").trim() || null;
+  const screenshotPrompt = ((form.get("screenshotPrompt") as string | null) ?? "").trim() || null;
+  const rawSource = ((form.get("screenshotSource") as string | null) ?? "vmos").trim();
+  const screenshotSource = ["vmos", "ai_openai", "ai_gemini", "template"].includes(rawSource)
+    ? rawSource
+    : "vmos";
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "Missing 'file' field" }, { status: 400 });
   }
@@ -43,6 +54,10 @@ export async function POST(req: Request) {
       apkPath: "",
       apkSize: BigInt(buf.byteLength),
       apkSha256: sha,
+      metadataPrompt,
+      screenshotPrompt,
+      screenshotSource,
+      autoCreateApp: !huaweiAppId,
     },
   });
 

@@ -54,6 +54,56 @@ export async function stepParseApk(uploadId: string) {
   return parsed;
 }
 
+// ---------------------- Step 1b: Auto-link AGC app ----------------------
+
+// APK-only flow: if the upload isn't linked to a HuaweiApp yet, resolve the
+// AGC appId from the parsed package name via Huawei's appid-list API and
+// link/reuse a HuaweiApp record. If the package isn't registered in the
+// account yet, we log actionable guidance and leave it unlinked (publish will
+// then fail with a clear message rather than silently).
+export async function stepAutoLinkApp(uploadId: string) {
+  const upload = await prisma.upload.findUniqueOrThrow({ where: { id: uploadId } });
+  if (upload.huaweiAppId) return; // already linked
+  const pkg = upload.packageName;
+  if (!pkg) {
+    await logEvent(uploadId, "warn", "No package name parsed; cannot auto-link AGC app");
+    return;
+  }
+
+  await logEvent(uploadId, "info", `Resolving AGC appId for package ${pkg}`);
+  let agcAppId: string | undefined;
+  try {
+    const client = huaweiClientFromEnv();
+    const map = await client.queryAppIdByPackage([pkg]);
+    agcAppId = map.get(pkg);
+  } catch (err) {
+    await logEvent(uploadId, "warn", `appid-list lookup failed: ${(err as Error).message}`);
+  }
+
+  if (!agcAppId) {
+    await logEvent(
+      uploadId,
+      "warn",
+      `No AGC app found for ${pkg}. Create the app once in AppGallery Connect (or link it in Settings); ` +
+        `re-running will auto-link it. Huawei has no public API to create a new app.`,
+    );
+    return;
+  }
+
+  const app = await prisma.huaweiApp.upsert({
+    where: { agcAppId },
+    update: { packageName: pkg, displayName: upload.apkLabel ?? pkg },
+    create: {
+      agcAppId,
+      packageName: pkg,
+      displayName: upload.apkLabel ?? pkg,
+      autoLinked: true,
+    },
+  });
+  await prisma.upload.update({ where: { id: uploadId }, data: { huaweiAppId: app.id } });
+  await logEvent(uploadId, "info", `Auto-linked to AGC app ${agcAppId}`);
+}
+
 // ---------------------- Step 2: Generate metadata ----------------------
 
 export async function stepGenerateMetadata(uploadId: string) {
@@ -73,7 +123,7 @@ export async function stepGenerateMetadata(uploadId: string) {
     sha256: upload.apkSha256 ?? "",
   };
 
-  const en = await generateMetadata(apk, DEFAULT_LOCALE);
+  const en = await generateMetadata(apk, DEFAULT_LOCALE, upload.metadataPrompt);
   await prisma.localization.upsert({
     where: { uploadId_locale: { uploadId, locale: DEFAULT_LOCALE } },
     update: en,
@@ -149,9 +199,18 @@ export async function stepGenerateScreenshots(uploadId: string) {
     sha256: upload.apkSha256 ?? "",
   };
 
+  const source = (upload.screenshotSource ?? "vmos") as
+    | "vmos"
+    | "ai_openai"
+    | "ai_gemini"
+    | "template";
+  await logEvent(uploadId, "info", `Screenshot source: ${source}`);
   const shots = await generateScreenshots(apk, upload.apkPath, assetDir, taglines, {
     uploadId,
     packageName: upload.packageName ?? undefined,
+    source,
+    customPrompt: upload.screenshotPrompt,
+    onProgress: (msg) => logEvent(uploadId, "info", msg),
   });
 
   await prisma.screenshot.deleteMany({ where: { uploadId } });
@@ -193,12 +252,19 @@ export async function stepPublishToHuawei(uploadId: string) {
   const client = huaweiClientFromEnv();
   const appId = upload.huaweiApp.agcAppId;
 
-  // Upload APK
+  // Ensure the app has distribution countries — the OBS upload endpoint resolves
+  // the storage site from them, and APK uploads fail without any set.
+  await logEvent(uploadId, "info", "Ensuring distribution countries are set");
+  await client.ensureDistributionCountries(appId);
+
+  // Upload APK (OBS presigned PUT, bound by objectId)
   await logEvent(uploadId, "info", "Requesting upload URL for APK");
-  const apkSlot = await client.getUploadUrl(appId, "apk");
-  await logEvent(uploadId, "info", "Uploading APK to Huawei CDN");
-  const apkFile = await client.uploadFile(upload.apkPath, apkSlot.uploadUrl, apkSlot.authCode);
-  await client.updateAppFile(appId, apkFile.fileDestUrl, apkFile.size, path.basename(upload.apkPath));
+  const apkBytes = (await fs.stat(upload.apkPath)).size;
+  const apkSlot = await client.getUploadUrl(appId, "release.apk", apkBytes, "apk");
+  await logEvent(uploadId, "info", "Uploading APK to Huawei OBS");
+  const apkFile = await client.uploadFile(upload.apkPath, apkSlot);
+  await logEvent(uploadId, "info", `Binding APK objectId ${apkFile.objectId}`);
+  await client.updateAppFile(appId, apkFile.objectId, "release.apk");
 
   // App-level info
   await client.updateAppInfo(appId, {
@@ -225,11 +291,13 @@ export async function stepPublishToHuawei(uploadId: string) {
   // Screenshots (English first; Huawei will inherit if other langs missing imgs)
   const englishShots = upload.screenshots.filter((s) => s.locale === DEFAULT_LOCALE);
   if (englishShots.length > 0) {
-    const uploaded: Array<{ fileDestUrl: string; fileName: string; size: string }> = [];
+    const uploaded: Array<{ objectId: string; fileName: string }> = [];
     for (const shot of englishShots) {
-      const slot = await client.getUploadUrl(appId, "png");
-      const file = await client.uploadFile(shot.path, slot.uploadUrl, slot.authCode);
-      uploaded.push({ fileDestUrl: file.fileDestUrl, fileName: path.basename(shot.path), size: file.size });
+      const fileName = path.basename(shot.path);
+      const shotBytes = (await fs.stat(shot.path)).size;
+      const slot = await client.getUploadUrl(appId, fileName, shotBytes, "png");
+      const file = await client.uploadFile(shot.path, slot);
+      uploaded.push({ objectId: file.objectId, fileName });
       await prisma.screenshot.update({
         where: { id: shot.id },
         data: { uploadedToHuaweiAt: new Date() },
@@ -237,6 +305,10 @@ export async function stepPublishToHuawei(uploadId: string) {
     }
     await client.updateAppImage(appId, toHuaweiLocale(DEFAULT_LOCALE), "screenshot", uploaded);
   }
+
+  // Give Huawei a moment to process the freshly-bound package before submit
+  // (submitting immediately can fail with "Incomplete application version information").
+  await new Promise((r) => setTimeout(r, 8000));
 
   // Submit
   await logEvent(uploadId, "info", "Submitting for review");
@@ -251,6 +323,7 @@ export async function stepPublishToHuawei(uploadId: string) {
 export async function runPreparationPipeline(uploadId: string) {
   try {
     await stepParseApk(uploadId);
+    await stepAutoLinkApp(uploadId);
     await stepGenerateMetadata(uploadId);
     await stepTranslate(uploadId);
     await stepGenerateScreenshots(uploadId);

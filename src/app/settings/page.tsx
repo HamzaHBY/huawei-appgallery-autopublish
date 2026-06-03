@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { NewHuaweiAppForm } from "@/components/NewHuaweiAppForm";
+import { AiSettingsForm } from "@/components/AiSettingsForm";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,15 @@ export default async function SettingsPage() {
 
   return (
     <div className="space-y-8">
+      <section className="card">
+        <h2 className="mb-1 text-lg font-semibold">AI models</h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Choose which provider/model generates your text (metadata) and images (screenshots), and
+          manage API keys for OpenAI, DeepSeek, and Gemini.
+        </p>
+        <AiSettingsForm />
+      </section>
+
       <section className="card">
         <h2 className="mb-4 text-lg font-semibold">API credentials</h2>
         <ul className="space-y-2 text-sm">

@@ -1,7 +1,7 @@
 // Generates AppGallery metadata (title, short description, full description,
 // keywords, what's new) from parsed APK info using GPT-4o.
 import { z } from "zod";
-import { DEFAULT_MODEL, getOpenAI } from "./openai";
+import { getTextClient } from "./ai-config";
 import type { ParsedApk } from "./apk-parser";
 
 export const GeneratedMetadataSchema = z.object({
@@ -25,8 +25,16 @@ const SYSTEM_PROMPT = `You are a senior ASO (App Store Optimization) writer for 
 - What's new: 1-3 short lines, plain text.
 Output ONLY valid JSON matching the schema, no markdown code fences.`;
 
-export async function generateMetadata(apk: ParsedApk, locale = "en-US"): Promise<GeneratedMetadata> {
-  const openai = getOpenAI();
+export async function generateMetadata(
+  apk: ParsedApk,
+  locale = "en-US",
+  customPrompt?: string | null,
+): Promise<GeneratedMetadata> {
+  const { client: openai, model } = await getTextClient();
+
+  const steer = customPrompt && customPrompt.trim().length > 0
+    ? `\n\nIMPORTANT — follow these user instructions for tone/positioning/content (without violating Huawei policy or the character limits):\n"""${customPrompt.trim()}"""`
+    : "";
 
   const userPrompt = `Generate Huawei AppGallery store listing metadata in language "${locale}" for this app.
 
@@ -38,12 +46,12 @@ Parsed APK info:
 - Target Android API: ${apk.targetSdkVersion}
 - Permissions (top 10): ${apk.permissions.slice(0, 10).join(", ") || "none"}
 
-Infer the app's purpose and target audience from the package name, label, and permissions. If it appears to be a game, write game-style copy; otherwise utility/productivity copy.
+Infer the app's purpose and target audience from the package name, label, and permissions. If it appears to be a game, write game-style copy; otherwise utility/productivity copy.${steer}
 
 Return JSON with fields: title, shortDescription, description, keywords, whatsNew.`;
 
   const completion = await openai.chat.completions.create({
-    model: DEFAULT_MODEL,
+    model,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: userPrompt },
@@ -63,10 +71,10 @@ export async function translateMetadata(
   toLocale: string,
 ): Promise<GeneratedMetadata> {
   if (fromLocale === toLocale) return source;
-  const openai = getOpenAI();
+  const { client: openai, model } = await getTextClient();
 
   const completion = await openai.chat.completions.create({
-    model: DEFAULT_MODEL,
+    model,
     messages: [
       {
         role: "system",

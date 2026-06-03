@@ -18,10 +18,16 @@
 //   client_id: <client_id>
 //   Content-Type: application/json (except multipart upload)
 
-import { createReadStream, promises as fs } from "fs";
-import { basename } from "path";
+import { promises as fs } from "fs";
 
 const BASE_URL = "https://connect-api.cloud.huawei.com/api";
+
+// Broad default distribution list used when an app has no countries configured.
+// Huawei needs at least one distribution country before an APK can be uploaded
+// (the OBS site is resolved from this list).
+const DEFAULT_PUBLISH_COUNTRIES =
+  "SG,MY,TH,HK,MO,TW,AU,ID,QA,KW,IL,SA,LB,BH,JO,PK,AE,OM,GB,FR,DE,IT,FI,CH,ES,DK,SE,BE," +
+  "NL,AT,PL,US,JP,KR,NZ,PH,VN,BD,IN,TR,UA,RU,ZA,EG,MA,NG,BR,MX,CA";
 
 export interface HuaweiCredentials {
   clientId: string;
@@ -127,80 +133,71 @@ export class HuaweiAgcClient {
     return parsed;
   }
 
-  // ---------------------- File upload ----------------------
+  // ---------------------- File upload (OBS flow) ----------------------
 
-  // Get an upload URL for an APK or image.
-  async getUploadUrl(appId: string, suffix: "apk" | "png" | "jpg" = "apk") {
-    const json = await this.authedFetch<{
-      uploadUrl: string;
-      authCode: string;
-      chunkUploadUrl?: string;
-    }>(`/publish/v2/upload-url`, {
+  // Obtain a presigned OBS upload slot (current Huawei flow).
+  //   GET /publish/v2/upload-url/for-obs → { urlInfo: { url, headers, objectId } }
+  // The returned `objectId` is what must be bound via app-file-info /
+  // app-image-info. Binding the destination URL instead is rejected by Huawei
+  // with "The files url is not objectId" — the legacy `/upload-url` +
+  // `fileDestUrl` flow no longer works for new versions.
+  async getUploadUrl(
+    appId: string,
+    fileName: string,
+    contentLength: number,
+    suffix: "apk" | "aab" | "png" | "jpg" = "apk",
+  ): Promise<{ url: string; headers: Record<string, string>; objectId: string }> {
+    const json = await this.authedFetch(`/publish/v2/upload-url/for-obs`, {
       method: "GET",
-      query: {
-        appId,
-        suffix,
-        releaseType: 1,
-      },
+      query: { appId, fileName, contentLength, suffix },
     });
-    const uploadUrl = (json as Record<string, unknown>).uploadUrl as string | undefined;
-    const authCode = (json as Record<string, unknown>).authCode as string | undefined;
-    if (!uploadUrl || !authCode) {
-      throw new HuaweiAgcError(`upload-url response missing fields: ${JSON.stringify(json)}`);
+    const urlInfo = (json as Record<string, unknown>).urlInfo as
+      | { url?: string; headers?: Record<string, string>; objectId?: string }
+      | undefined;
+    if (!urlInfo?.url || !urlInfo?.objectId) {
+      throw new HuaweiAgcError(
+        `upload-url/for-obs missing urlInfo: ${JSON.stringify(json).slice(0, 300)}`,
+      );
     }
-    return { uploadUrl, authCode };
+    return { url: urlInfo.url, headers: urlInfo.headers ?? {}, objectId: urlInfo.objectId };
   }
 
-  // Upload a local file to Huawei's edge.
-  async uploadFile(filePath: string, uploadUrl: string, authCode: string, fileName?: string) {
-    const stat = await fs.stat(filePath);
-    const name = fileName ?? basename(filePath);
-
-    const form = new FormData();
-    form.append("authCode", authCode);
-    form.append("fileCount", "1");
-    // FormData in Node 20+ supports streams via Blob — convert from file.
+  // Upload a local file to the presigned OBS URL via a single PUT, echoing the
+  // signed headers Huawei returned. Returns the objectId used to bind the file.
+  async uploadFile(
+    filePath: string,
+    slot: { url: string; headers: Record<string, string>; objectId: string },
+  ): Promise<{ objectId: string; size: string }> {
     const buf = await fs.readFile(filePath);
-    form.append("file", new Blob([buf]), name);
-
-    const res = await fetch(uploadUrl, { method: "POST", body: form });
+    // Echo the signed headers verbatim, but drop Host/Content-Length — fetch
+    // (undici) sets these itself to match the request, and Host is a forbidden
+    // header. The signed Host equals the URL host, so this stays valid.
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(slot.headers ?? {})) {
+      const lk = k.toLowerCase();
+      if (lk === "host" || lk === "content-length") continue;
+      if (typeof v === "string") headers[k] = v;
+    }
+    const res = await fetch(slot.url, { method: "PUT", headers, body: buf });
     if (!res.ok) {
-      const text = await res.text();
-      throw new HuaweiAgcError(`File upload failed: ${res.status} ${text}`);
+      const text = await res.text().catch(() => "");
+      throw new HuaweiAgcError(`OBS upload failed: ${res.status} ${text.slice(0, 300)}`);
     }
-    const json = (await res.json()) as {
-      result?: {
-        UploadFileRsp?: {
-          ifSuccess?: number;
-          fileInfoList?: Array<{ fileDestUrl: string; size: string }>;
-        };
-      };
-    };
-    const ok = json.result?.UploadFileRsp?.ifSuccess === 1;
-    if (!ok) {
-      throw new HuaweiAgcError(`File upload rejected: ${JSON.stringify(json)}`);
-    }
-    const fileInfo = json.result?.UploadFileRsp?.fileInfoList?.[0];
-    if (!fileInfo) throw new HuaweiAgcError(`File upload returned no fileInfo`);
-    void stat;
-    return fileInfo;
+    return { objectId: slot.objectId, size: String(buf.length) };
   }
 
   // ---------------------- App metadata ----------------------
 
-  // Attach an uploaded APK to an app
-  async updateAppFile(
-    appId: string,
-    fileDestUrl: string,
-    fileSize: string,
-    fileName: string,
-  ) {
+  // Attach an uploaded APK to an app. `objectId` comes from getUploadUrl/
+  // uploadFile and is bound via the `fileDestUrl` body field (Huawei's field
+  // name; the value must be the objectId, not a URL).
+  async updateAppFile(appId: string, objectId: string, fileName: string) {
     return this.authedFetch(`/publish/v2/app-file-info`, {
       method: "PUT",
       query: { appId, releaseType: 1 },
       body: JSON.stringify({
         fileType: 5, // 5 = RPK/APK release file
-        files: [{ fileName, fileDestUrl, size: fileSize }],
+        files: [{ fileName, fileDestUrl: objectId }],
       }),
     });
   }
@@ -227,12 +224,13 @@ export class HuaweiAgcClient {
     });
   }
 
-  // Attach a screenshot to a locale (after uploading via getUploadUrl/uploadFile)
+  // Attach screenshots to a locale (after uploading via getUploadUrl/uploadFile).
+  // Each image is bound by its objectId, same as the APK.
   async updateAppImage(
     appId: string,
     lang: string,
     imageType: "screenshot" | "icon" = "screenshot",
-    imageList: Array<{ fileDestUrl: string; fileName: string; size: string }>,
+    imageList: Array<{ objectId: string; fileName: string }>,
   ) {
     const huaweiType = imageType === "screenshot" ? 5 : 1; // 5 = phone screenshot, 1 = icon
     return this.authedFetch(`/publish/v2/app-image-info`, {
@@ -242,9 +240,8 @@ export class HuaweiAgcClient {
         lang,
         imageType: huaweiType,
         imageList: imageList.map((img) => ({
-          fileDestUrl: img.fileDestUrl,
+          fileDestUrl: img.objectId,
           fileName: img.fileName,
-          size: img.size,
         })),
       }),
     });
@@ -280,6 +277,68 @@ export class HuaweiAgcClient {
       query: { appId, releaseType: 1 },
     });
   }
+
+  // The OBS upload endpoint (/upload-url/for-obs) resolves which storage site to
+  // use from the app's distribution country list. If the app has no distribution
+  // countries set, APK uploads fail with:
+  //   "[cfs] get siteId failed ... distContryList is empty and usage route site is not China."
+  // This ensures a country list exists before we request an upload URL.
+  // Returns true if countries are present (already or after setting them).
+  async ensureDistributionCountries(appId: string): Promise<boolean> {
+    const info = (await this.getAppInfo(appId)) as Record<string, unknown>;
+    const appInfo = (info.appInfo ?? {}) as Record<string, unknown>;
+    const existing = (appInfo.publishCountry as string | undefined) ?? "";
+    if (existing.trim().length > 0) return true;
+
+    try {
+      await this.authedFetch(`/publish/v2/app-info`, {
+        method: "PUT",
+        query: { appId, releaseType: 1 },
+        body: JSON.stringify({ publishCountry: DEFAULT_PUBLISH_COUNTRIES }),
+      });
+    } catch (err) {
+      // 204144757 = category not selected. Huawei refuses to persist ANY
+      // app-info change (including countries) until a category is chosen, and
+      // the category cannot be set through the publishing API. Surface a clear,
+      // actionable message instead of the cryptic "distContryList is empty".
+      const msg = err instanceof HuaweiAgcError ? err.ret?.msg ?? err.message : String(err);
+      throw new HuaweiAgcError(
+        `App ${appId} cannot be published yet: it has no distribution countries and ` +
+          `Huawei rejected setting them because the app category is not selected ` +
+          `(Huawei: "${msg}"). Open this app in AppGallery Connect → App information, ` +
+          `select a category and distribution countries (and complete content rating / ` +
+          `privacy policy if prompted), then retry. The category cannot be set via the API.`,
+      );
+    }
+
+    // Re-check that the write actually persisted.
+    const after = (await this.getAppInfo(appId)) as Record<string, unknown>;
+    const afterInfo = (after.appInfo ?? {}) as Record<string, unknown>;
+    return ((afterInfo.publishCountry as string | undefined) ?? "").trim().length > 0;
+  }
+
+  // Resolve the AGC appId(s) for one or more package names.
+  // GET /publish/v2/appid-list?packageName=a,b  → { appids: [{ key: name, value: appId }] }
+  // Returns a map of packageName -> appId (only for packages that resolved).
+  async queryAppIdByPackage(packageNames: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    if (packageNames.length === 0) return result;
+    const json = await this.authedFetch<unknown>(`/publish/v2/appid-list`, {
+      method: "GET",
+      query: { packageName: packageNames.join(",") },
+    });
+    // Response shape: { ret, appids: [{ key: <appName>, value: <appId> }] }
+    // Huawei keys the pair by app *name*, not package — so when querying a single
+    // package the single returned value is the appId for that package.
+    const appids = (json as Record<string, unknown>).appids as
+      | Array<{ key?: string; value?: string }>
+      | undefined;
+    if (appids && appids.length > 0 && packageNames.length === 1) {
+      const v = appids[0]?.value;
+      if (v) result.set(packageNames[0], v);
+    }
+    return result;
+  }
 }
 
 export function huaweiClientFromEnv(): HuaweiAgcClient {
@@ -292,5 +351,3 @@ export function huaweiClientFromEnv(): HuaweiAgcClient {
   return new HuaweiAgcClient({ clientId, clientSecret, teamId });
 }
 
-// Keep createReadStream import in scope (used in future streaming upload variants)
-void createReadStream;

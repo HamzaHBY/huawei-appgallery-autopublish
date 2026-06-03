@@ -8,26 +8,36 @@ interface AppOption {
   packageName: string;
 }
 
+const SCREENSHOT_SOURCES: Array<{ value: string; label: string; hint: string }> = [
+  { value: "vmos", label: "VMOS emulator (real device)", hint: "Installs the APK on a cloud Android device and captures real screens from different stages." },
+  { value: "ai_openai", label: "AI · ChatGPT (OpenAI gpt-image)", hint: "Generates store screenshots with OpenAI's gpt-image models (choose gpt-image-1 / gpt-image-2 in Settings). Prompts auto-built from the APK." },
+  { value: "ai_gemini", label: "AI · nano banana (Gemini 2.5 Flash Image)", hint: "Generates store screenshots with Google's nano banana model." },
+  { value: "template", label: "Template (icon + tagline)", hint: "Fast deterministic mockups using the app icon and generated taglines." },
+];
+
 export function UploadDropzone({ apps }: { apps: AppOption[] }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [selectedAppId, setSelectedAppId] = useState(apps[0]?.id ?? "");
+  // "" = auto-detect from APK (APK-only flow)
+  const [selectedAppId, setSelectedAppId] = useState("");
+  const [screenshotSource, setScreenshotSource] = useState("vmos");
+  const [metadataPrompt, setMetadataPrompt] = useState("");
+  const [screenshotPrompt, setScreenshotPrompt] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   async function handleFile(file: File) {
-    if (!selectedAppId) {
-      setError("Pick a Huawei app first");
-      return;
-    }
     setError(null);
     setIsUploading(true);
     setProgress(0);
 
     const form = new FormData();
     form.append("file", file);
-    form.append("huaweiAppId", selectedAppId);
+    if (selectedAppId) form.append("huaweiAppId", selectedAppId);
+    form.append("screenshotSource", screenshotSource);
+    if (metadataPrompt.trim()) form.append("metadataPrompt", metadataPrompt.trim());
+    if (screenshotPrompt.trim()) form.append("screenshotPrompt", screenshotPrompt.trim());
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/uploads");
@@ -50,6 +60,9 @@ export function UploadDropzone({ apps }: { apps: AppOption[] }) {
     xhr.send(form);
   }
 
+  const activeHint = SCREENSHOT_SOURCES.find((s) => s.value === screenshotSource)?.hint;
+  const isAi = screenshotSource === "ai_openai" || screenshotSource === "ai_gemini";
+
   return (
     <div className="space-y-4">
       <div>
@@ -59,12 +72,62 @@ export function UploadDropzone({ apps }: { apps: AppOption[] }) {
           value={selectedAppId}
           onChange={(e) => setSelectedAppId(e.target.value)}
         >
+          <option value="">Auto-detect from APK (recommended)</option>
           {apps.map((a) => (
             <option key={a.id} value={a.id}>
               {a.displayName} ({a.packageName})
             </option>
           ))}
         </select>
+        <p className="mt-1 text-xs text-neutral-500">
+          Auto-detect extracts the name + package ID from the APK and links the matching AppGallery
+          app automatically.
+        </p>
+      </div>
+
+      <div>
+        <label className="label">Screenshots</label>
+        <select
+          className="select"
+          value={screenshotSource}
+          onChange={(e) => setScreenshotSource(e.target.value)}
+        >
+          {SCREENSHOT_SOURCES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        {activeHint && <p className="mt-1 text-xs text-neutral-500">{activeHint}</p>}
+      </div>
+
+      {isAi && (
+        <div>
+          <label className="label">Screenshot prompt (optional)</label>
+          <textarea
+            className="select min-h-[72px]"
+            placeholder="e.g. 5 screenshots: title screen, choosing a dress, makeup studio, hair salon, final runway reveal with confetti."
+            value={screenshotPrompt}
+            onChange={(e) => setScreenshotPrompt(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-neutral-500">
+            Describe the concept or stages you want. The 4–5 AI screenshots are generated to match
+            your description. Leave blank to auto-derive scenes from the APK.
+          </p>
+        </div>
+      )}
+
+      <div>
+        <label className="label">Metadata prompt (optional)</label>
+        <textarea
+          className="select min-h-[72px]"
+          placeholder="e.g. Emphasize that it's a relaxing dress-up game for kids; friendly, playful tone."
+          value={metadataPrompt}
+          onChange={(e) => setMetadataPrompt(e.target.value)}
+        />
+        <p className="mt-1 text-xs text-neutral-500">
+          Steers the AI-written title/description. Leave blank to auto-generate from the APK.
+        </p>
       </div>
 
       <div
