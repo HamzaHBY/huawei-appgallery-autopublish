@@ -10,7 +10,7 @@ interface AppOption {
 
 const SCREENSHOT_SOURCES: Array<{ value: string; label: string; hint: string }> = [
   { value: "vmos", label: "VMOS emulator (real device)", hint: "Installs the APK on a cloud Android device and captures real screens from different stages." },
-  { value: "ai_openai", label: "AI · ChatGPT (gpt-image-1)", hint: "Generates store screenshots with OpenAI. Prompts auto-built from the APK." },
+  { value: "ai_openai", label: "AI · ChatGPT (OpenAI gpt-image)", hint: "Generates store screenshots with OpenAI's gpt-image models (choose gpt-image-1 / gpt-image-2 in Settings). Prompts auto-built from the APK." },
   { value: "ai_gemini", label: "AI · nano banana (Gemini 2.5 Flash Image)", hint: "Generates store screenshots with Google's nano banana model." },
   { value: "template", label: "Template (icon + tagline)", hint: "Fast deterministic mockups using the app icon and generated taglines." },
 ];
@@ -22,6 +22,7 @@ export function UploadDropzone({ apps }: { apps: AppOption[] }) {
   const [selectedAppId, setSelectedAppId] = useState("");
   const [screenshotSource, setScreenshotSource] = useState("vmos");
   const [metadataPrompt, setMetadataPrompt] = useState("");
+  const [screenshotPrompt, setScreenshotPrompt] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +37,7 @@ export function UploadDropzone({ apps }: { apps: AppOption[] }) {
     if (selectedAppId) form.append("huaweiAppId", selectedAppId);
     form.append("screenshotSource", screenshotSource);
     if (metadataPrompt.trim()) form.append("metadataPrompt", metadataPrompt.trim());
+    if (screenshotPrompt.trim()) form.append("screenshotPrompt", screenshotPrompt.trim());
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/uploads");
@@ -59,6 +61,7 @@ export function UploadDropzone({ apps }: { apps: AppOption[] }) {
   }
 
   const activeHint = SCREENSHOT_SOURCES.find((s) => s.value === screenshotSource)?.hint;
+  const isAi = screenshotSource === "ai_openai" || screenshotSource === "ai_gemini";
 
   return (
     <div className="space-y-4">
@@ -97,6 +100,22 @@ export function UploadDropzone({ apps }: { apps: AppOption[] }) {
         </select>
         {activeHint && <p className="mt-1 text-xs text-neutral-500">{activeHint}</p>}
       </div>
+
+      {isAi && (
+        <div>
+          <label className="label">Screenshot prompt (optional)</label>
+          <textarea
+            className="select min-h-[72px]"
+            placeholder="e.g. 5 screenshots: title screen, choosing a dress, makeup studio, hair salon, final runway reveal with confetti."
+            value={screenshotPrompt}
+            onChange={(e) => setScreenshotPrompt(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-neutral-500">
+            Describe the concept or stages you want. The 4–5 AI screenshots are generated to match
+            your description. Leave blank to auto-derive scenes from the APK.
+          </p>
+        </div>
+      )}
 
       <div>
         <label className="label">Metadata prompt (optional)</label>

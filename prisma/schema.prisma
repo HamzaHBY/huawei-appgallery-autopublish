@@ -48,6 +48,7 @@ model Upload {
   // Generation options (chosen at upload time)
   screenshotSource String  @default("vmos") // vmos | ai_openai | ai_gemini | template
   metadataPrompt   String?                   // optional custom prompt to steer metadata
+  screenshotPrompt String?                   // optional custom prompt to steer screenshots
   autoCreateApp    Boolean @default(false)   // APK-only flow: auto-resolve/create AGC app
 
   // Pipeline state
@@ -209,14 +210,31 @@ model AppGalleryFetch {
   packageName  String?
   appName      String?
   versionName  String?
+  versionCode  Int?
   developer    String?
   iconUrl      String?
   description  String?
   apkPath      String? // local path if the binary was downloaded
   apkSize      BigInt?
+
+  // APK analysis (populated after download)
+  minSdkVersion    Int?
+  targetSdkVersion Int?
+  label            String?
+  permissions      String[] @default([])
+  nativeAbis       String[] @default([])
+  fileCount        Int?
+  sdks             Json? // detected third-party SDKs [{ name, category, evidence }]
+
   status       String   @default("PENDING") // PENDING | INFO_ONLY | DOWNLOADED | FAILED
   errorMessage String?
   rawDetail    Json?
+
+  // Auto-cleanup: APK file is deleted ~2 days after creation unless the user
+  // downloaded it. downloadedByUserAt records the last browser download.
+  downloadedByUserAt DateTime?
+  apkDeletedAt       DateTime? // set when the file was auto-removed to free space
+
   createdAt    DateTime @default(now())
 }
 

@@ -10,7 +10,8 @@
 import { promises as fs } from "fs";
 import path from "path";
 import sharp from "sharp";
-import { DEFAULT_MODEL, getOpenAI } from "./openai";
+import OpenAI from "openai";
+import { getApiKey, getTextClient, resolveImageModel } from "./ai-config";
 import type { ParsedApk } from "./apk-parser";
 import type { GeneratedScreenshot } from "./screenshots";
 
@@ -20,7 +21,7 @@ const H = 1920;
 export type AiProvider = "ai_openai" | "ai_gemini";
 
 export function aiImageModelLabel(provider: AiProvider): string {
-  return provider === "ai_gemini" ? "gemini-2.5-flash-image (nano banana)" : "gpt-image-1";
+  return provider === "ai_gemini" ? "gemini-2.5-flash-image (nano banana)" : "OpenAI gpt-image";
 }
 
 // ---------------------- Prompt generation ----------------------
@@ -30,7 +31,14 @@ const STYLE_SUFFIX =
   "high detail, app store marketing quality, no text watermarks, no device frame bezel.";
 
 // Ask GPT for N concrete scene prompts describing distinct screens/stages of the app.
-export async function buildScreenshotPrompts(apk: ParsedApk, count: number, taglines: string[]): Promise<string[]> {
+// When `customPrompt` is provided, the user's concept/stages drive the scenes.
+export async function buildScreenshotPrompts(
+  apk: ParsedApk,
+  count: number,
+  taglines: string[],
+  customPrompt?: string | null,
+): Promise<string[]> {
+  const hasCustom = !!(customPrompt && customPrompt.trim().length > 0);
   const fallback = (): string[] => {
     const base = apk.label || apk.packageName || "the app";
     const seeds = [
@@ -41,13 +49,18 @@ export async function buildScreenshotPrompts(apk: ParsedApk, count: number, tagl
       `Onboarding / welcome screen of "${base}"`,
       `Detailed content view in "${base}"`,
     ];
-    return seeds.slice(0, count).map((s, i) => `${s}. ${taglines[i] ? `Theme: ${taglines[i]}. ` : ""}${STYLE_SUFFIX}`);
+    const concept = hasCustom ? ` Concept: ${customPrompt!.trim()}.` : "";
+    return seeds.slice(0, count).map((s, i) => `${s}.${concept} ${taglines[i] ? `Theme: ${taglines[i]}. ` : ""}${STYLE_SUFFIX}`);
   };
 
+  const steer = hasCustom
+    ? `\n\nThe user described what the screenshots should represent. Treat this as the PRIMARY brief — derive ${count} distinct scenes that realize the concept/stages described, in order:\n"""${customPrompt!.trim()}"""`
+    : "";
+
   try {
-    const openai = getOpenAI();
+    const { client: openai, model } = await getTextClient();
     const completion = await openai.chat.completions.create({
-      model: DEFAULT_MODEL,
+      model,
       messages: [
         {
           role: "system",
@@ -62,7 +75,7 @@ export async function buildScreenshotPrompts(apk: ParsedApk, count: number, tagl
           content: `App label: ${apk.label}
 Package: ${apk.packageName}
 Permissions (hint at capabilities): ${apk.permissions.slice(0, 12).join(", ") || "none"}
-Taglines: ${taglines.join(" | ")}
+Taglines: ${taglines.join(" | ")}${steer}
 
 Generate exactly ${count} prompts, each ending with this exact style instruction: "${STYLE_SUFFIX}"`,
         },
@@ -85,24 +98,28 @@ Generate exactly ${count} prompts, each ending with this exact style instruction
 // ---------------------- Providers ----------------------
 
 async function generateWithOpenAI(prompt: string): Promise<Buffer> {
-  const openai = getOpenAI();
-  const res = await openai.images.generate({
-    model: process.env.OPENAI_IMAGE_MODEL && process.env.OPENAI_IMAGE_MODEL.startsWith("gpt-image")
-      ? process.env.OPENAI_IMAGE_MODEL
-      : "gpt-image-1",
-    prompt,
-    size: "1024x1536", // portrait; resized to 1080x1920 below
-    n: 1,
-  });
+  const apiKey = await getApiKey("openai");
+  if (!apiKey) throw new Error("No OpenAI API key configured (Settings or OPENAI_API_KEY)");
+  const model = await resolveImageModel("openai");
+  const openai = new OpenAI({ apiKey });
+  // dall-e-3 uses a different portrait size; gpt-image-* accept 1024x1536.
+  const size = model === "dall-e-3" ? "1024x1792" : "1024x1536";
+  const res = await openai.images.generate({ model, prompt, size: size as "1024x1536", n: 1 });
   const b64 = res.data?.[0]?.b64_json;
-  if (!b64) throw new Error("gpt-image-1 returned no image data");
-  return Buffer.from(b64, "base64");
+  if (b64) return Buffer.from(b64, "base64");
+  // dall-e-3 returns a URL instead of b64 unless response_format is set.
+  const remoteUrl = res.data?.[0]?.url;
+  if (remoteUrl) {
+    const r = await fetch(remoteUrl);
+    return Buffer.from(await r.arrayBuffer());
+  }
+  throw new Error(`${model} returned no image data`);
 }
 
 async function generateWithGemini(prompt: string): Promise<Buffer> {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error("GEMINI_API_KEY is not configured");
-  const model = process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image";
+  const key = await getApiKey("gemini");
+  if (!key) throw new Error("No Gemini API key configured (Settings or GEMINI_API_KEY)");
+  const model = await resolveImageModel("gemini");
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
   const res = await fetch(url, {
     method: "POST",
@@ -137,6 +154,7 @@ async function generateOne(provider: AiProvider, prompt: string): Promise<Buffer
 export interface AiScreenshotsOpts {
   provider: AiProvider;
   count?: number;
+  customPrompt?: string | null;
   onProgress?: (msg: string) => Promise<void> | void;
 }
 
@@ -148,7 +166,7 @@ export async function generateAiScreenshots(
 ): Promise<GeneratedScreenshot[]> {
   await fs.mkdir(outDir, { recursive: true });
   const count = opts.count ?? 5;
-  const prompts = await buildScreenshotPrompts(apk, count, taglines);
+  const prompts = await buildScreenshotPrompts(apk, count, taglines, opts.customPrompt);
   const results: GeneratedScreenshot[] = [];
 
   for (let i = 0; i < prompts.length; i++) {

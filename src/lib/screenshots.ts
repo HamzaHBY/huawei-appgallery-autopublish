@@ -108,6 +108,7 @@ export interface GenerateScreenshotsOpts {
   uploadId: string;
   packageName?: string;
   source?: ScreenshotSourceChoice;
+  customPrompt?: string | null;
   onProgress?: (msg: string) => Promise<void> | void;
 }
 
@@ -126,6 +127,7 @@ export async function generateScreenshots(
     try {
       const shots = await generateAiScreenshots(apk, outDir, taglines, {
         provider: source,
+        customPrompt: opts?.customPrompt,
         onProgress: opts?.onProgress,
       });
       if (shots.length > 0) return shots;

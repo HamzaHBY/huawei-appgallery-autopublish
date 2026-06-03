@@ -2,8 +2,23 @@
 // Run with: `npm run worker` (separate process from Next.js).
 import { prisma } from "../lib/db";
 import { runPreparationPipeline, publishApprovedUpload } from "../lib/workflow";
+import { cleanupExpiredAppGalleryApks } from "../lib/cleanup";
 
 const POLL_MS = parseInt(process.env.WORKER_POLL_INTERVAL_MS || "5000", 10);
+const CLEANUP_INTERVAL_MS = parseInt(process.env.CLEANUP_INTERVAL_MS || "3600000", 10); // hourly
+let lastCleanup = 0;
+
+async function maybeRunCleanup() {
+  const now = Date.now();
+  if (now - lastCleanup < CLEANUP_INTERVAL_MS) return;
+  lastCleanup = now;
+  try {
+    const removed = await cleanupExpiredAppGalleryApks();
+    if (removed > 0) console.log(`[worker] cleanup removed ${removed} expired AppGallery APK(s)`);
+  } catch (err) {
+    console.error("[worker] cleanup failed:", err);
+  }
+}
 
 async function processOneJob() {
   // Atomically claim a job using a transaction
@@ -58,6 +73,7 @@ async function main() {
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      await maybeRunCleanup();
       const did = await processOneJob();
       if (!did) await new Promise((r) => setTimeout(r, POLL_MS));
     } catch (err) {

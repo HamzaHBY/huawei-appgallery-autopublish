@@ -209,6 +209,7 @@ export async function stepGenerateScreenshots(uploadId: string) {
     uploadId,
     packageName: upload.packageName ?? undefined,
     source,
+    customPrompt: upload.screenshotPrompt,
     onProgress: (msg) => logEvent(uploadId, "info", msg),
   });
 

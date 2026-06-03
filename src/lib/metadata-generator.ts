@@ -1,7 +1,7 @@
 // Generates AppGallery metadata (title, short description, full description,
 // keywords, what's new) from parsed APK info using GPT-4o.
 import { z } from "zod";
-import { DEFAULT_MODEL, getOpenAI } from "./openai";
+import { getTextClient } from "./ai-config";
 import type { ParsedApk } from "./apk-parser";
 
 export const GeneratedMetadataSchema = z.object({
@@ -30,7 +30,7 @@ export async function generateMetadata(
   locale = "en-US",
   customPrompt?: string | null,
 ): Promise<GeneratedMetadata> {
-  const openai = getOpenAI();
+  const { client: openai, model } = await getTextClient();
 
   const steer = customPrompt && customPrompt.trim().length > 0
     ? `\n\nIMPORTANT — follow these user instructions for tone/positioning/content (without violating Huawei policy or the character limits):\n"""${customPrompt.trim()}"""`
@@ -51,7 +51,7 @@ Infer the app's purpose and target audience from the package name, label, and pe
 Return JSON with fields: title, shortDescription, description, keywords, whatsNew.`;
 
   const completion = await openai.chat.completions.create({
-    model: DEFAULT_MODEL,
+    model,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: userPrompt },
@@ -71,10 +71,10 @@ export async function translateMetadata(
   toLocale: string,
 ): Promise<GeneratedMetadata> {
   if (fromLocale === toLocale) return source;
-  const openai = getOpenAI();
+  const { client: openai, model } = await getTextClient();
 
   const completion = await openai.chat.completions.create({
-    model: DEFAULT_MODEL,
+    model,
     messages: [
       {
         role: "system",
